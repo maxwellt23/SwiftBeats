@@ -19,7 +19,6 @@ final class SwiftBeatsTextView: NSTextView {
     var onToggleComment: (() -> Void)?
 
     override func keyDown(with event: NSEvent) {
-        // keyCode 44 = / on all standard layouts, Cmd modifier = Cmd+/
         if event.modifierFlags.contains(.command) && event.keyCode == 44 {
             onToggleComment?()
             return
@@ -223,18 +222,15 @@ struct CodeEditorView: NSViewRepresentable {
         init(parent: CodeEditorView) {
             self.parent = parent
             super.init()
-            NotificationCenter.default.addObserver(
-                self,
-                selector: #selector(handleInsertNote(_:)),
-                name: .insertNote,
-                object: nil
-            )
+            NotificationCenter.default.addObserver(self, selector: #selector(handleInsertNote(_:)), name: .insertNote, object: nil)
+            NotificationCenter.default.addObserver(self, selector: #selector(handleAppendLine(_:)), name: .appendLine, object: nil)
         }
 
         deinit {
             NotificationCenter.default.removeObserver(self)
         }
 
+        // Insert text at cursor (notes, instrument params)
         @objc func handleInsertNote(_ notification: Notification) {
             guard let text = notification.object as? String,
                   let tv = textView else { return }
@@ -243,6 +239,25 @@ struct CodeEditorView: NSViewRepresentable {
                 tv.textStorage?.replaceCharacters(in: range, with: text)
                 tv.didChangeText()
                 tv.setSelectedRange(NSRange(location: range.location + (text as NSString).length, length: 0))
+            }
+        }
+
+        // Append a full command line to the end of the document (effect chips)
+        @objc func handleAppendLine(_ notification: Notification) {
+            guard let text = notification.object as? String,
+                  let tv = textView,
+                  let storage = tv.textStorage else { return }
+            var insertion = text
+            // Ensure we start on a new line
+            if storage.length > 0 {
+                let last = (storage.string as NSString).character(at: storage.length - 1)
+                if last != "\n".utf16.first { insertion = "\n" + insertion }
+            }
+            let end = NSRange(location: storage.length, length: 0)
+            if tv.shouldChangeText(in: end, replacementString: insertion) {
+                storage.replaceCharacters(in: end, with: insertion)
+                tv.didChangeText()
+                tv.setSelectedRange(NSRange(location: storage.length, length: 0))
             }
         }
 
