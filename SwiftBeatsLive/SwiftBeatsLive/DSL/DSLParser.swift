@@ -194,7 +194,7 @@ final class DSLParser {
     }
  
     private func executeSequence(tokens: [String], ctx: LineContext) -> Result<ParseInfo, DSLError> {
-        // Syntax: sequence [C4 (C4+E4+G4) - G4] bpm:120 wave:sine env:pluck
+        // Syntax: sequence [C4 (C4+E4+G4) - G4] bpm:120 wave:sine env:pluck step:eighth vol:0.8 oct:0
         //
         // Each step token is one of:
         //   C4          → single note
@@ -227,10 +227,13 @@ final class DSLParser {
         }
 
         let bpm      = parseParam("bpm", from: tokens).flatMap(Double.init) ?? 120.0
-        let waveform = parseWaveform(from: tokens) ?? .sine
-        let envelope = parseEnvelope(from: tokens) ?? .pluck
-        let timbre = parseTimbre(from: tokens)
-        let duration = Duration.quarter
+        let waveform = parseWaveformWithInstrumentFallback(from: tokens)
+        var envelope = parseEnvelope(from: tokens) ?? .pluck
+        let timbre   = parseTimbre(from: tokens)
+        let duration = parseStepDuration(from: tokens)
+        let velocity = parseParam("vol", from: tokens).flatMap(Double.init)?.clamped(to: 0...1) ?? 0.8
+        let octShift = parseParam("oct", from: tokens).flatMap(Int.init) ?? 0
+        envelope     = applyADSROverrides(to: envelope, from: tokens)
 
         // Build Step array — each token becomes a Step
         let steps: [Step] = stepTokens.map { token in
@@ -238,19 +241,18 @@ final class DSLParser {
                 // Rest
                 return Step(note: nil, duration: duration, waveform: waveform, envelope: envelope, timbre: timbre)
             } else if token.hasPrefix("(") && token.hasSuffix(")") {
-                // Chord step: (C4+E4+G4) — extract notes, use first as Step note,
-                // the rest fire as simultaneous noteOns via a special chord step.
-                // For now we use the root note as the Step's note and store the
-                // full chord in a ChordStep wrapper below.
+                // Chord step: (C4+E4+G4) — extract notes, play all simultaneously.
                 let inner = String(token.dropFirst().dropLast())
-                let chordNotes = inner.components(separatedBy: "+").compactMap { parseNote($0.trimmingCharacters(in: .whitespaces)) }
+                let chordNotes = inner.components(separatedBy: "+")
+                    .compactMap { parseNote($0.trimmingCharacters(in: .whitespaces)) }
+                    .map { shiftOctave($0, by: octShift) }
                 let root = chordNotes.first
                 return Step(note: root, duration: duration,
-                           velocity: 0.8, waveform: waveform, envelope: envelope, timbre: timbre,
+                           velocity: velocity, waveform: waveform, envelope: envelope, timbre: timbre,
                            chordNotes: chordNotes.count > 1 ? chordNotes : nil)
             } else {
-                let note = parseNote(token)
-                return Step(note: note, duration: duration, waveform: waveform, envelope: envelope, timbre: timbre)
+                let note = parseNote(token).map { shiftOctave($0, by: octShift) }
+                return Step(note: note, duration: duration, velocity: velocity, waveform: waveform, envelope: envelope, timbre: timbre)
             }
         }
 
@@ -394,6 +396,52 @@ final class DSLParser {
         default: return nil
         }
     }
+
+    /// wave: param wins; otherwise falls back to the instrument's natural waveform.
+    private func parseWaveformWithInstrumentFallback(from tokens: [String]) -> Waveform {
+        if let explicit = parseWaveform(from: tokens) { return explicit }
+        if let inst = parseParam("instrument", from: tokens) ?? parseParam("inst", from: tokens) {
+            return waveformForInstrument(inst.lowercased())
+        }
+        return .sine
+    }
+
+    private func waveformForInstrument(_ name: String) -> Waveform {
+        switch name {
+        case "synthbass", "synth_bass": return .sawtooth
+        case "lead":                    return .square
+        case "arp":                     return .triangle
+        case "ambientpad", "ambient":   return .sine
+        case "plucked", "harp":         return .triangle
+        default:                        return .sine
+        }
+    }
+
+    private func parseStepDuration(from tokens: [String]) -> Duration {
+        guard let raw = parseParam("step", from: tokens) else { return .quarter }
+        switch raw.lowercased() {
+        case "sixteenth", "16th": return .sixteenth
+        case "eighth", "8th":    return .eighth
+        case "quarter", "4th":   return .quarter
+        case "half":             return .half
+        case "whole":            return .whole
+        default:                 return .quarter
+        }
+    }
+
+    private func applyADSROverrides(to env: Envelope, from tokens: [String]) -> Envelope {
+        var e = env
+        if let a = parseParam("attack",  from: tokens).flatMap(Double.init) { e.attack  = max(0.001, a) }
+        if let d = parseParam("decay",   from: tokens).flatMap(Double.init) { e.decay   = max(0.001, d) }
+        if let s = parseParam("sustain", from: tokens).flatMap(Double.init) { e.sustain = s.clamped(to: 0...1) }
+        if let r = parseParam("release", from: tokens).flatMap(Double.init) { e.release = max(0.001, r) }
+        return e
+    }
+
+    private func shiftOctave(_ note: Note, by shift: Int) -> Note {
+        guard shift != 0 else { return note }
+        return Note(note.pitch, octave: (note.octave + shift).clamped(to: 0...8))
+    }
  
     private func parseEnvelope(from tokens: [String]) -> Envelope? {
         if let inst = parseParam("instrument", from: tokens) ?? parseParam("inst", from: tokens) {
@@ -401,42 +449,41 @@ final class DSLParser {
         }
         
         guard let raw = parseParam("env", from: tokens) else { return nil }
-        switch raw.lowercased() {
-        case "pluck": return .pluck
-        case "piano": return .piano
-        case "pad": return .pad
-        case "organ": return .organ
-        case "vibraphone", "vibe": return .vibraphone
-        case "marimba": return .marimba
-        case "bell": return .bell
-        case "flute": return .flute
-        case "strings", "string": return .strings
-        default: return nil
-        }
+        return envelopeForInstrument(raw.lowercased())
     }
     
     private func envelopeForInstrument(_ name: String) -> Envelope {
         switch name {
-        case "vibraphone", "vibe":      return .vibraphone
-        case "marimba":                 return .marimba
-        case "bell":                    return .bell
-        case "flute":                   return .flute
-        case "strings", "string":       return .strings
-        case "piano":                   return .piano
-        case "organ":                   return .organ
-        case "pad":                     return .pad
-        default:                        return .pluck
+        case "vibraphone", "vibe":          return .vibraphone
+        case "marimba":                     return .marimba
+        case "bell":                        return .bell
+        case "flute":                       return .flute
+        case "strings", "string":           return .strings
+        case "piano":                       return .piano
+        case "organ":                       return .organ
+        case "pad":                         return .pad
+        case "synthbass", "synth_bass":     return Envelope(attack: 0.005, decay: 0.4,  sustain: 0.2, release: 0.1)
+        case "lead":                        return Envelope(attack: 0.01,  decay: 0.2,  sustain: 0.6, release: 0.15)
+        case "arp":                         return Envelope(attack: 0.001, decay: 0.25, sustain: 0.0, release: 0.05)
+        case "ambientpad", "ambient":       return Envelope(attack: 0.4,   decay: 0.1,  sustain: 0.9, release: 0.6)
+        case "plucked", "harp":             return Envelope(attack: 0.001, decay: 0.15, sustain: 0.0, release: 0.08)
+        default:                            return .pluck
         }
     }
-    
+
     func timbreForInstrument(_ name: String) -> TimbrePreset {
         switch name.lowercased() {
-        case "vibraphone", "vibe":      return .vibraphone
-        case "marimba":                 return .marimba
-        case "bell":                    return .bell
-        case "flute":                   return .flute
-        case "strings", "string":       return .strings
-        default:                        return .none
+        case "vibraphone", "vibe":          return .vibraphone
+        case "marimba":                     return .marimba
+        case "bell":                        return .bell
+        case "flute":                       return .flute
+        case "strings", "string":           return .strings
+        case "synthbass", "synth_bass":     return .none
+        case "lead":                        return .none
+        case "arp":                         return TimbrePreset(partialRatio: 1.5, partialLevel: 0.08)
+        case "ambientpad", "ambient":       return TimbrePreset(partialRatio: 1.5, partialLevel: 0.12)
+        case "plucked", "harp":             return .bell
+        default:                            return .none
         }
     }
     

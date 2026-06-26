@@ -182,11 +182,11 @@ struct CodeEditorView: NSViewRepresentable {
                   [.foregroundColor: NSColor.systemBlue], storage, text)
         applyRule(#"\b[A-Ga-g][#b]?[0-8]\b"#,
                   [.foregroundColor: NSColor.systemGreen], storage, text)
-        applyRule(#"\b(wave|env|vel|dur|mix|feedback|instrument|inst):"#,
+        applyRule(#"\b(wave|env|vel|dur|mix|feedback|instrument|inst|step|vol|oct|attack|decay|sustain|release|bpm):"#,
                   [.foregroundColor: NSColor.systemOrange], storage, text)
         applyRule(#"\b\d+(\.\d+)?\b"#,
                   [.foregroundColor: NSColor.systemPurple], storage, text)
-        applyRule(#"\b(sine|square|saw|sawtooth|triangle|tri|pluck|piano|pad|organ|vibraphone|vibe|marimba|bell|flute|strings|string)\b"#,
+        applyRule(#"\b(sine|square|saw|sawtooth|triangle|tri|pluck|piano|pad|organ|vibraphone|vibe|marimba|bell|flute|strings|string|synthbass|synth_bass|lead|arp|ambientpad|ambient|plucked|harp|eighth|quarter|half|whole|sixteenth)\b"#,
                   [.foregroundColor: NSColor.systemTeal], storage, text)
         // Comments last — overrides all rules above
         applyRule(#"//.*$"#, [

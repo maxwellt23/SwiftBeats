@@ -18,6 +18,11 @@ public struct TimbrePreset: Sendable {
     /// Amplitude of the partial relative to the fundamental (0.0–1.0)
     public let partialLevel: Double
 
+    public init(partialRatio: Double, partialLevel: Double) {
+        self.partialRatio = partialRatio
+        self.partialLevel = partialLevel
+    }
+
     public static let none       = TimbrePreset(partialRatio: 0.0,  partialLevel: 0.0)
     /// Vibraphone: inharmonic partial at 3.87x gives the metallic shimmer
     public static let vibraphone = TimbrePreset(partialRatio: 3.87, partialLevel: 0.25)
